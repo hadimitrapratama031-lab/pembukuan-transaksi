@@ -1,67 +1,34 @@
-import { Tabs } from 'expo-router';
-import { colors } from '../../src/lib/theme';
-import { Text } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Slot, Redirect, SplashScreen } from 'expo-router';
+import { supabase } from '../src/lib/supabase';
 
-export default function TabsLayout() {
-  return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.blue,
-        tabBarInactiveTintColor: colors.gray400,
-        tabBarStyle: {
-          backgroundColor: colors.white,
-          borderTopColor: colors.gray200,
-          borderTopWidth: 1,
-          paddingBottom: 8,
-          paddingTop: 6,
-          height: 64,
-        },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-      }}
-    >
-      <Tabs.Screen
-        name="dashboard"
-        options={{
-          title: 'Beranda',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 22 }}>🏠</Text>,
-        }}
-      />
-      <Tabs.Screen
-        name="tarik"
-        options={{
-          title: 'Tarik Tunai',
-          tabBarIcon: () => <Text style={{ fontSize: 22 }}>💸</Text>,
-        }}
-      />
-      <Tabs.Screen
-        name="transfer"
-        options={{
-          title: 'Transfer',
-          tabBarIcon: () => <Text style={{ fontSize: 22 }}>🔄</Text>,
-        }}
-      />
-      <Tabs.Screen
-        name="riwayat"
-        options={{
-          title: 'Riwayat',
-          tabBarIcon: () => <Text style={{ fontSize: 22 }}>📋</Text>,
-        }}
-      />
-      <Tabs.Screen
-        name="laporan"
-        options={{
-          title: 'Laporan',
-          tabBarIcon: () => <Text style={{ fontSize: 22 }}>📊</Text>,
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Pengaturan',
-          tabBarIcon: () => <Text style={{ fontSize: 22 }}>⚙️</Text>,
-        }}
-      />
-    </Tabs>
-  );
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
+export default function RootLayout() {
+  const [authChecked, setAuthChecked] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setHasSession(!!session);
+      setAuthChecked(true);
+      SplashScreen.hideAsync().catch(() => {});
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setHasSession(!!session);
+    });
+
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (!authChecked) {
+    return null;
+  }
+
+  if (!hasSession) {
+    return <Redirect href="/login" />;
+  }
+
+  return <Slot />;
 }
