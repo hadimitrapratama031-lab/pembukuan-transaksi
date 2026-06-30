@@ -1,0 +1,33 @@
+export const colors = {
+  blue: '#1a56db',
+  blueLight: '#3b82f6',
+  blueDark: '#1e40af',
+  green: '#059669',
+  greenLight: '#d1fae5',
+  red: '#dc2626',
+  redLight: '#fee2e2',
+  orange: '#d97706',
+  orangeLight: '#fef3c7',
+  gray50: '#f9fafb',
+  gray100: '#f3f4f6',
+  gray200: '#e5e7eb',
+  gray300: '#d1d5db',
+  gray400: '#9ca3af',
+  gray500: '#6b7280',
+  gray600: '#4b5563',
+  gray700: '#374151',
+  gray800: '#1f2937',
+  gray900: '#111827',
+  white: '#ffffff',
+};
+
+export const REKENING_COLORS: Record<string, string> = {
+  'bg-blue': '#dbeafe',
+  'bg-green': '#d1fae5',
+  'bg-purple': '#ede9fe',
+  'bg-orange': '#fef3c7',
+  'bg-pink': '#fce7f3',
+  'bg-teal': '#ccfbf1',
+  'bg-red': '#fee2e2',
+  'bg-yellow': '#fef9c3',
+};
