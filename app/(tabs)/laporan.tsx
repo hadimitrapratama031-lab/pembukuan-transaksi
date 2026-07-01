@@ -1,20 +1,27 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
   ActivityIndicator, Platform
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import * as FileSystem from 'expo-file-system';
+// PENTING: expo-file-system v19 (Expo SDK 54) memindahkan writeAsStringAsync,
+// EncodingType, dan cacheDirectory ke "expo-file-system/legacy". Import dari
+// "expo-file-system" biasa membuat method2 itu undefined -> exportExcel gagal
+// dengan error "Cannot read property 'base64' of undefined".
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { supabase } from '../../src/lib/supabase';
-import { colors } from '../../src/lib/theme';
 import { fmtRp, fmtDate, todayStr } from '../../src/lib/utils';
 import { TxItem } from './dashboard';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useTheme } from '../../src/lib/ThemeContext';
 
 type FilterType = 'hari' | 'minggu' | 'bulan';
 
 export default function LaporanScreen() {
+  const { colors, GRADIENT_HEADER } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [filter, setFilter] = useState<FilterType>('hari');
   const [tx, setTx] = useState<any[]>([]);
   const [rekening, setRekening] = useState<any[]>([]);
@@ -58,6 +65,32 @@ export default function LaporanScreen() {
   const tuTotal = tx.filter(t => t.jenis === 'TU').reduce((s, t) => s + t.nominal, 0);
   const tfTotal = tx.filter(t => t.jenis === 'TF').reduce((s, t) => s + t.nominal, 0);
 
+  // --- Styling helpers untuk border & header rapi ---
+  const THIN = { style: 'thin', color: { rgb: '000000' } } as const;
+  const BORDER_ALL = { top: THIN, bottom: THIN, left: THIN, right: THIN };
+  const STYLE_HEADER = {
+    font: { bold: true, color: { rgb: 'FFFFFF' } },
+    fill: { fgColor: { rgb: '2F6FED' } },
+    border: BORDER_ALL,
+    alignment: { vertical: 'center', horizontal: 'center', wrapText: true },
+  };
+  const STYLE_CELL = { border: BORDER_ALL, alignment: { vertical: 'center' } };
+  const STYLE_TOTAL = { font: { bold: true }, border: BORDER_ALL, fill: { fgColor: { rgb: 'EFEFEF' } } };
+
+  // Kasih border+style ke seluruh baris berisi data. Baris kosong (pemisah) dilewati.
+  const styleSheet = (ws: any, totalRowIdx?: number) => {
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        if (!ws[addr]) continue;
+        if (r === 0) ws[addr].s = STYLE_HEADER;
+        else if (totalRowIdx !== undefined && r === totalRowIdx) ws[addr].s = STYLE_TOTAL;
+        else ws[addr].s = STYLE_CELL;
+      }
+    }
+  };
+
   const exportExcel = async () => {
     if (tx.length === 0) {
       alert('Tidak ada data untuk diexport');
@@ -67,41 +100,80 @@ export default function LaporanScreen() {
     try {
       const wb = XLSX.utils.book_new();
 
-      const txData = [['No', 'Tanggal', 'Jenis', 'Nominal', 'Biaya Admin', 'Rekening', 'Rekening Cash', 'Catatan']];
-      tx.forEach((t, i) => txData.push([
-        String(i + 1), fmtDate(t.tanggal), t.jenis === 'TU' ? 'Tarik Tunai' : 'Transfer',
-        String(t.nominal), String(t.admin), t.rekening_nama || '-', t.cash_rekening_nama || '-', t.catatan || '-'
-      ]));
-      txData.push([]);
-      txData.push(['', 'TOTAL', '', String(tuTotal + tfTotal), String(totalAdmin), '', '', '']);
+      // --- Sheet 1: Transaksi ---
+      // "Bertambah/Berkurang" langsung kelihatan tanpa itung saldo sebelum/sesudah.
+      // "Keterangan" nampilin kalau ada penyesuaian channel — misalnya customer minta
+      // GoPay tapi rekening modal GoPay gaada, jadi dipakai SeaBank: tulisannya jadi
+      // "SeaBank → GoPay (customer)" biar jelas rekening modal apa yang dipakai.
+      const txData = [['No', 'Tanggal', 'Jenis', 'Nominal', 'Admin', 'Bertambah', 'Berkurang', 'Keterangan']];
+      tx.forEach((t, i) => {
+        const isTU = t.jenis === 'TU';
+        const namaBertambah = isTU ? t.rekening_nama : t.cash_rekening_nama;
+        const namaBerkurang = isTU ? t.cash_rekening_nama : t.rekening_nama;
+        let keterangan = t.catatan || '-';
+        if (t.channel_customer) {
+          const info = isTU
+            ? `Customer kirim dari ${t.channel_customer}`
+            : `${t.rekening_nama || 'Rekening modal'} → ${t.channel_customer} (customer)`;
+          keterangan = t.catatan ? `${info}. ${t.catatan}` : info;
+        }
+        txData.push([
+          String(i + 1), fmtDate(t.tanggal), isTU ? 'Tarik Tunai' : 'Transfer',
+          fmtRp(t.nominal), fmtRp(t.admin),
+          `${namaBertambah || '-'} (+${fmtRp(t.nominal)})`,
+          `${namaBerkurang || '-'} (-${fmtRp(t.nominal)})`,
+          keterangan,
+        ]);
+      });
+      const totalRow1 = txData.length;
+      txData.push(['', 'TOTAL', '', fmtRp(tuTotal + tfTotal), fmtRp(totalAdmin), '', '', '']);
       const ws1 = XLSX.utils.aoa_to_sheet(txData);
-      ws1['!cols'] = [{ wch: 5 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 25 }];
+      ws1['!cols'] = [{ wch: 5 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 26 }, { wch: 26 }, { wch: 34 }];
+      styleSheet(ws1, totalRow1);
       XLSX.utils.book_append_sheet(wb, ws1, 'Transaksi');
 
-      const rData = [['Nama Rekening', 'Tipe', 'Saldo Saat Ini']];
-      rekening.forEach(r => rData.push([r.nama, r.tipe === 'cash' ? 'Uang Tunai' : r.tipe === 'bank' ? 'Bank' : 'Digital', String(r.saldo)]));
-      rData.push([]);
-      rData.push(['TOTAL MODAL', '', String(rekening.reduce((s, r) => s + r.saldo, 0))]);
-      rData.push(['TOTAL KEUNTUNGAN', '', String(keuntungan)]);
+      // --- Sheet 2: Saldo Rekening ---
+      const totalModal = rekening.reduce((s, r) => s + r.saldo, 0);
+      const totalSaldoKeuntungan = totalModal + keuntungan;
+      const totalSaldoAdmin = totalModal + totalAdmin;
+
+      const rData = [['Rekening', 'Saldo']];
+      rekening.forEach(r => rData.push([r.nama, fmtRp(r.saldo)]));
+      const totalRow2 = rData.length;
+      rData.push(['Total Saldo', fmtRp(totalModal)]);
+      rData.push(['Total Admin (Periode Ini)', fmtRp(totalAdmin)]);
+      rData.push(['TOTAL Saldo + Admin', fmtRp(totalSaldoAdmin)]);
+      rData.push(['Total Keuntungan Kumulatif', fmtRp(keuntungan)]);
+      rData.push(['TOTAL Saldo + Keuntungan', fmtRp(totalSaldoKeuntungan)]);
       const ws2 = XLSX.utils.aoa_to_sheet(rData);
-      ws2['!cols'] = [{ wch: 20 }, { wch: 15 }, { wch: 18 }];
+      ws2['!cols'] = [{ wch: 28 }, { wch: 18 }];
+      styleSheet(ws2, totalRow2);
+      // Tebalin baris2 total lainnya juga (bukan cuma baris "Total Saldo")
+      for (let r = totalRow2; r < rData.length; r++) {
+        for (let c = 0; c < 2; c++) {
+          const addr = XLSX.utils.encode_cell({ r, c });
+          if (ws2[addr]) ws2[addr].s = STYLE_TOTAL;
+        }
+      }
       XLSX.utils.book_append_sheet(wb, ws2, 'Saldo Rekening');
 
+      // --- Sheet 3: Ringkasan ---
       const ringkasan = [
-        ['LAPORAN KASIR ATM'],
+        ['LAPORAN KASIR ATM', ''],
         ['Periode', filter === 'hari' ? 'Hari Ini' : filter === 'minggu' ? 'Minggu Ini' : 'Bulan Ini'],
         ['Tanggal Export', fmtDate(new Date().toISOString())],
-        [],
         ['Total Transaksi', String(tx.length)],
-        ['Total Tarik Tunai', String(tuTotal)],
-        ['Total Transfer', String(tfTotal)],
-        ['Total Keuntungan (Admin)', String(totalAdmin)],
-        [],
-        ['Total Modal Saat Ini', String(rekening.reduce((s, r) => s + r.saldo, 0))],
-        ['Kumulatif Keuntungan', String(keuntungan)],
+        ['Total Admin (Periode Ini)', fmtRp(totalAdmin)],
+        ['Total Saldo Sekarang', fmtRp(totalModal)],
+        ['TOTAL Saldo + Admin', fmtRp(totalSaldoAdmin)],
+        ['Total Keuntungan Kumulatif', fmtRp(keuntungan)],
+        ['TOTAL Saldo + Keuntungan', fmtRp(totalSaldoKeuntungan)],
       ];
       const ws3 = XLSX.utils.aoa_to_sheet(ringkasan);
-      ws3['!cols'] = [{ wch: 25 }, { wch: 20 }];
+      ws3['!cols'] = [{ wch: 28 }, { wch: 18 }];
+      styleSheet(ws3);
+      // Tebalin baris2 total di ringkasan (baris "TOTAL Saldo + Admin" & "TOTAL Saldo + Keuntungan")
+      ['A7', 'B7', 'A9', 'B9'].forEach(a => { if (ws3[a]) ws3[a].s = STYLE_TOTAL; });
       XLSX.utils.book_append_sheet(wb, ws3, 'Ringkasan');
 
       const wbout = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
@@ -124,9 +196,9 @@ export default function LaporanScreen() {
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
+      <LinearGradient colors={GRADIENT_HEADER} style={styles.header}>
         <Text style={styles.headerTitle}>📊 Laporan</Text>
-      </View>
+      </LinearGradient>
 
       <View style={styles.filterRow}>
         {([['hari', 'Hari Ini'], ['minggu', 'Minggu Ini'], ['bulan', 'Bulan Ini']] as [FilterType, string][]).map(([f, label]) => (
@@ -197,22 +269,24 @@ export default function LaporanScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.gray100 },
-  header: { backgroundColor: colors.blueDark, paddingTop: 56, paddingBottom: 16, paddingHorizontal: 20 },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: colors.white },
+  header: { paddingTop: 56, paddingBottom: 16, paddingHorizontal: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: colors.white },
   filterRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 12 },
-  filterBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: colors.gray200, backgroundColor: colors.white },
+  filterBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: colors.gray200, backgroundColor: colors.surface1 },
   filterBtnActive: { backgroundColor: colors.blue, borderColor: colors.blue },
   filterText: { fontSize: 13, fontWeight: '600', color: colors.gray600 },
   filterTextActive: { color: colors.white },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   summaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 12 },
-  summaryCard: { flex: 1, minWidth: '45%', backgroundColor: colors.white, borderRadius: 12, padding: 14, elevation: 2 },
+  summaryCard: { flex: 1, minWidth: '45%', backgroundColor: colors.surface1, borderWidth: 0.5, borderColor: colors.gray200, borderRadius: 12, padding: 14, elevation: 2 },
   summaryLabel: { fontSize: 11, color: colors.gray500, fontWeight: '500' },
   summaryValue: { fontSize: 17, fontWeight: '700', color: colors.gray800, marginTop: 4 },
   exportBtn: { backgroundColor: colors.green, borderRadius: 8, padding: 14, alignItems: 'center', marginBottom: 16 },
   exportBtnText: { color: colors.white, fontSize: 15, fontWeight: '600' },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: colors.gray500, letterSpacing: 0.5, marginBottom: 8 },
-  txCard: { backgroundColor: colors.white, borderRadius: 12, paddingHorizontal: 16, marginBottom: 8 },
+  txCard: { backgroundColor: colors.surface1, borderWidth: 0.5, borderColor: colors.gray200, borderRadius: 12, paddingHorizontal: 16, marginBottom: 8 },
 });
+}

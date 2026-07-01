@@ -1,34 +1,58 @@
-import { useEffect, useState } from 'react';
-import { Slot, Redirect, SplashScreen } from 'expo-router';
-import { supabase } from '../src/lib/supabase';
+import { Tabs } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../../src/lib/ThemeContext';
 
-SplashScreen.preventAutoHideAsync().catch(() => {});
-
-export default function RootLayout() {
-  const [authChecked, setAuthChecked] = useState(false);
-  const [hasSession, setHasSession] = useState(false);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setHasSession(!!session);
-      setAuthChecked(true);
-      SplashScreen.hideAsync().catch(() => {});
-    });
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setHasSession(!!session);
-    });
-
-    return () => listener.subscription.unsubscribe();
-  }, []);
-
-  if (!authChecked) {
-    return null;
-  }
-
-  if (!hasSession) {
-    return <Redirect href="/login" />;
-  }
-
-  return <Slot />;
+// Tabs layout: definisikan tab bar navigasi
+export default function TabsLayout() {
+  const { colors } = useTheme();
+  return (
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: { backgroundColor: colors.surface2, borderTopColor: colors.gray200, borderTopWidth: 0.5, height: 64, paddingBottom: 10, paddingTop: 8 },
+        tabBarActiveTintColor: colors.blue,
+        tabBarInactiveTintColor: colors.gray400,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+      }}
+    >
+      <Tabs.Screen
+        name="dashboard"
+        options={{
+          title: 'Dashboard',
+          tabBarIcon: ({ color }) => <Ionicons name="home-outline" size={22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="tarik"
+        options={{ href: null }}
+      />
+      <Tabs.Screen
+        name="transfer"
+        options={{ href: null }}
+      />
+      <Tabs.Screen
+        name="riwayat"
+        options={{
+          title: 'Riwayat',
+          tabBarIcon: ({ color }) => <Ionicons name="time-outline" size={22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="laporan"
+        options={{
+          title: 'Laporan',
+          tabBarIcon: ({ color }) => <Ionicons name="bar-chart-outline" size={22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Pengaturan',
+          tabBarIcon: ({ color }) => <Ionicons name="settings-outline" size={22} color={color} />,
+        }}
+      />
+      {/* index.tsx di dalam (tabs) hanya redirect, sembunyikan dari tab bar */}
+      <Tabs.Screen name="index" options={{ href: null }} />
+    </Tabs>
+  );
 }

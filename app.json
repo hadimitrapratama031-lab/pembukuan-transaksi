@@ -1,21 +1,21 @@
 {
   "expo": {
-    "name": "Kasir ATM",
-    "slug": "kasir-atm",
+    "name": "Pembukuan Mini ATM",
+    "slug": "pembukuan-mini-atm",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "scheme": "kasir-atm",
-    "userInterfaceStyle": "light",
+    "scheme": "pembukuan-mini-atm",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1e40af"
+      "backgroundColor": "#0d1512"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a56db"
+        "backgroundColor": "#0d1512"
       },
       "package": "com.kasir.atm",
       "versionCode": 1,
@@ -30,7 +30,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "de2fddc6-cd90-46aa-ae09-5f0a193124a3"
+        "projectId": "32997066-ef17-4617-a2b9-b312dcb58166"
       }
     }
   }

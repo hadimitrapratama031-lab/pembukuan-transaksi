@@ -1,0 +1,98 @@
+# ============================================================
+# Workflow: custom-build
+# ============================================================
+# Dipicu oleh Edge Function "request-build" lewat GitHub API
+# (repository_dispatch, event_type: custom-build).
+#
+# Yang dilakukan:
+#   1. Checkout kode project
+#   2. Timpa "name" & "icon" di app.json sesuai branding user
+#   3. Download logo user, ganti assets/icon.png & adaptive-icon.png
+#   4. Jalankan `eas build` (APK, non-interactive, no-wait)
+#   5. Simpan eas_build_id ke Supabase supaya webhook nanti bisa
+#      mencocokkan build mana yang selesai punya siapa
+#
+# SECRETS yang WAJIB diisi di GitHub repo
+# (Settings > Secrets and variables > Actions):
+#   EXPO_TOKEN                 -> Access Token dari expo.dev (Account Settings > Access Tokens)
+#   SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY
+# ============================================================
+
+name: Custom Branding Build
+
+on:
+  repository_dispatch:
+    types: [custom-build]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kode
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install eas-cli
+        run: npm install -g eas-cli
+
+      - name: Install dependencies project
+        run: npm install
+
+      - name: Timpa nama aplikasi di app.json
+        env:
+          APP_NAME: ${{ github.event.client_payload.app_name }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+            config.expo.name = process.env.APP_NAME;
+            fs.writeFileSync('app.json', JSON.stringify(config, null, 2));
+          "
+
+      - name: Download & pasang logo custom sebagai icon
+        env:
+          LOGO_URL: ${{ github.event.client_payload.logo_url }}
+        run: |
+          if [ -n "$LOGO_URL" ] && [ "$LOGO_URL" != "null" ]; then
+            curl -L "$LOGO_URL" -o /tmp/logo-raw.png
+            npm install -g sharp-cli
+            # Ikon Android butuh ukuran spesifik & background solid (adaptive icon
+            # butuh foreground transparan, tapi kita pakai versi sederhana dulu)
+            sharp -i /tmp/logo-raw.png -o ./assets/icon.png resize 1024 1024
+            sharp -i /tmp/logo-raw.png -o ./assets/adaptive-icon.png resize 1024 1024
+          else
+            echo "Tidak ada logo custom, pakai icon default."
+          fi
+
+      - name: Jalankan EAS Build (Android APK)
+        id: eas_build
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          RESULT=$(eas build -p android --profile preview --non-interactive --no-wait --json)
+          echo "$RESULT"
+          BUILD_ID=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const j=JSON.parse(d);console.log(Array.isArray(j)?j[0].id:j.id);})")
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Simpan eas_build_id ke Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BUILD_REQUEST_ID: ${{ github.event.client_payload.build_request_id }}
+          EAS_BUILD_ID: ${{ steps.eas_build.outputs.build_id }}
+        run: |
+          curl -X PATCH "$SUPABASE_URL/rest/v1/build_requests?id=eq.$BUILD_REQUEST_ID" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"eas_build_id\": \"$EAS_BUILD_ID\", \"status\": \"building\"}"
+
+      # Catatan: setelah ini, EAS akan lanjut build di server EAS sendiri
+      # (di luar GitHub Actions), dan saat selesai akan kirim webhook ke
+      # Edge Function "build-webhook" yang update status jadi "ready"
+      # beserta link APK-nya.

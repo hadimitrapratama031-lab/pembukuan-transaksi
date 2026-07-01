@@ -17,6 +17,7 @@ create table if not exists rekening (
   nama text not null,
   emoji text default '💳',
   warna text default 'bg-blue',
+  logo_url text,
   tipe text default 'digital', -- digital / cash / bank
   saldo bigint default 0,
   modal_awal bigint default 0,
@@ -61,18 +62,22 @@ alter table transaksi enable row level security;
 alter table pengaturan enable row level security;
 
 -- Profiles: hanya bisa akses profil sendiri
+drop policy if exists "profiles_own" on profiles;
 create policy "profiles_own" on profiles
   for all using (auth.uid() = id);
 
 -- Rekening: hanya milik sendiri
+drop policy if exists "rekening_own" on rekening;
 create policy "rekening_own" on rekening
   for all using (auth.uid() = user_id);
 
 -- Transaksi: hanya milik sendiri
+drop policy if exists "transaksi_own" on transaksi;
 create policy "transaksi_own" on transaksi
   for all using (auth.uid() = user_id);
 
 -- Pengaturan: hanya milik sendiri
+drop policy if exists "pengaturan_own" on pengaturan;
 create policy "pengaturan_own" on pengaturan
   for all using (auth.uid() = user_id);
 

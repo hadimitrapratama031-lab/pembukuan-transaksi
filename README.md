@@ -87,9 +87,70 @@ Proses build di server Expo (gratis, tier hobi) memakan waktu **±10-20 menit**.
 
 ---
 
+## 🆕 Setup Fitur Baru (Admin, PIN, dll)
+
+Sebelum pakai fitur "Kelola Akun" dan "PIN", jalankan langkah berikut:
+
+### A. Jalankan Migration SQL
+1. Buka Supabase → **SQL Editor**
+2. Copy isi `supabase-migration-v2.sql` → paste → **Run**
+3. Di file itu ada baris `update profiles set role = 'admin' where ...` yang di-comment — uncomment, ganti `EMAIL_KAMU` dengan email akun utamamu, lalu jalankan baris itu sendiri supaya akun kamu jadi admin.
+
+### B. Deploy Edge Function `admin-users`
+Fitur "+ Tambah Akun User" di halaman Pengaturan butuh Edge Function ini (supaya tidak perlu service role key disimpan di app).
+
+```bash
+npm install -g supabase
+supabase login
+supabase link --project-ref <project-ref-kamu>   # lihat di Project Settings > General
+supabase functions deploy admin-users
+```
+
+*(Project ref kamu: `dqiayrsojpyglkumtsgo` — sudah otomatis dari `src/lib/supabase.ts`)*
+
+Setelah deploy selesai, tombol **"+ Tambah Akun User"** di Pengaturan akan langsung bisa dipakai membuat akun staff/mitra baru tanpa buka dashboard Supabase.
+
+### C. PIN Keamanan
+Tidak perlu setup tambahan — setelah migration SQL jalan, setiap login pertama kali kamu akan diminta membuat PIN 6 digit. PIN bisa diganti lewat Pengaturan → **Ubah PIN**.
+
+**Update PIN terbaru:**
+- PIN sekarang **selalu diminta lagi** setiap kali app dibuka ulang dari kondisi tertutup (force close / restart HP), maupun setelah app diminimize ke background lalu dibuka lagi.
+- Tombol **Reset Modal ke Awal**, **Hapus Semua Transaksi**, dan **Hapus Semua Rekening & Modal** sekarang wajib konfirmasi PIN dulu sebelum benar-benar jalan — supaya tidak ke-trigger gara-gara kepencet.
+
+---
+
+## 🆕 Migration v3 (wajib untuk fitur "Hapus Semua Rekening & Modal")
+
+1. Buka Supabase → **SQL Editor**
+2. Copy isi `supabase-migration-v3.sql` → paste → **Run**
+
+Tanpa migration ini, fitur "Hapus Semua Rekening & Modal" akan gagal kalau rekening tsb pernah dipakai di transaksi (karena foreign key constraint). Setelah migration ini, riwayat transaksi lama tetap aman tersimpan walau rekeningnya sudah dihapus (nama rekening di riwayat tetap muncul).
+
+---
+
+## 🆕 Migration v4 (wajib untuk fitur "Identitas Aplikasi" — nama warung & logo)
+
+1. Buka Supabase → **SQL Editor**
+2. Copy isi `supabase-migration-v4.sql` → paste → **Run**
+
+Tanpa migration ini, fitur ganti nama & logo aplikasi di Pengaturan / saat setup PIN pertama kali akan error karena kolomnya belum ada di database.
+
+## 🆕 Migration v5 (perbaikan "Database error creating new user")
+
+Kalau muncul error **"Database error creating new user"** (baik saat Add User langsung di dashboard Supabase, maupun lewat tombol "+ Tambah Akun User" di app):
+
+1. Buka Supabase → **SQL Editor**
+2. Copy isi `supabase-migration-v5.sql` → paste → **Run**
+
+Ini memperbaiki trigger otomatis yang membuat baris `profiles` & `pengaturan` setiap ada user baru daftar (penyebab paling umum: trigger-nya nggak punya `search_path` yang jelas). Kalau setelah migration ini masih gagal, cek **Logs → Postgres Logs** di dashboard Supabase, cari kata `handle_new_user` untuk lihat pesan error detailnya.
+
+---
+
 ## 👤 Menambah Akun Baru (mitra/karyawan)
 
-Hanya kamu yang bisa membuat akun baru (tidak ada pendaftaran sendiri):
+**Cara baru (lebih mudah):** Login sebagai admin → tab **Pengaturan** → **Kelola Akun** → **+ Tambah Akun User**. Isi nama, email, password, lalu kasih ke orangnya. Selesai — tidak perlu buka Supabase sama sekali. (Pastikan Edge Function `admin-users` sudah di-deploy, lihat bagian "Setup Fitur Baru" di atas.)
+
+**Cara lama (manual via dashboard, kalau Edge Function belum di-deploy):**
 1. Buka Supabase Dashboard → **Authentication → Users**
 2. Klik **Add User** → isi email & password
 3. Berikan email & password itu ke orang yang bersangkutan
@@ -144,3 +205,9 @@ kasir-atm-rn/
 **Login gagal "Invalid login credentials"** → pastikan user sudah dibuat di Supabase Authentication, dan email/password sesuai.
 
 **Data tidak muncul setelah login** → cek apakah SQL setup sudah dijalankan dengan benar (tabel `rekening`, `transaksi`, `pengaturan`, `profiles` harus ada).
+
+**"+ Tambah Akun User" gagal / error "FunctionsFetchError"** → Edge Function `admin-users` belum di-deploy. Lihat bagian "🆕 Setup Fitur Baru" di atas.
+
+**Tidak muncul section "Kelola Akun" di Pengaturan** → akunmu belum berstatus admin. Jalankan ulang baris `update profiles set role = 'admin' ...` di `supabase-migration-v2.sql` dengan email akunmu.
+
+**Lupa PIN** → hubungi admin (atau kalau itu akun admin sendiri), jalankan SQL ini di Supabase SQL Editor untuk reset PIN: `update profiles set pin_hash = null where id = (select id from auth.users where email = 'EMAIL_AKUN');` — lalu login ulang, akan diminta membuat PIN baru.

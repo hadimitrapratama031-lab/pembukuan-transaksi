@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Modal, StyleSheet } from 'react-native';
-import { colors } from '../lib/theme';
+import { useTheme } from '../lib/ThemeContext';
 
 export function usePromptModal() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [visible, setVisible] = useState(false);
   const [title, setTitle] = useState('');
   const [value, setValue] = useState('');
@@ -48,15 +50,17 @@ export function usePromptModal() {
   return { prompt, PromptComponent };
 }
 
-const styles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  box: { backgroundColor: colors.white, borderRadius: 16, padding: 20, width: '100%', maxWidth: 340 },
-  title: { fontSize: 16, fontWeight: '700', color: colors.gray800, marginBottom: 16 },
-  input: { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: 8, padding: 12, fontSize: 15, marginBottom: 16, color: colors.gray800 },
-  btnRow: { flexDirection: 'row', gap: 8 },
-  btn: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center' },
-  btnOutline: { backgroundColor: colors.white, borderWidth: 1.5, borderColor: colors.gray200 },
-  btnPrimary: { backgroundColor: colors.blue },
-  btnOutlineText: { fontSize: 14, fontWeight: '600', color: colors.gray700 },
-  btnText: { fontSize: 14, fontWeight: '600', color: colors.white },
-});
+function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+    box: { backgroundColor: colors.surface1, borderWidth: 0.5, borderColor: colors.gray200, borderRadius: 16, padding: 20, width: '100%', maxWidth: 340 },
+    title: { fontSize: 16, fontWeight: '700', color: colors.gray800, marginBottom: 16 },
+    input: { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: 8, padding: 12, fontSize: 15, marginBottom: 16, color: colors.gray800 },
+    btnRow: { flexDirection: 'row', gap: 8 },
+    btn: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center' },
+    btnOutline: { backgroundColor: colors.surface1, borderWidth: 1.5, borderColor: colors.gray200 },
+    btnPrimary: { backgroundColor: colors.blue },
+    btnOutlineText: { fontSize: 14, fontWeight: '600', color: colors.gray700 },
+    btnText: { fontSize: 14, fontWeight: '600', color: colors.white },
+  });
+}

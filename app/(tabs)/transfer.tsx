@@ -1,29 +1,35 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   TextInput, Alert, ActivityIndicator
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../../src/lib/supabase';
-import { colors, REKENING_COLORS } from '../../src/lib/theme';
+import { useTheme } from '../../src/lib/ThemeContext';
 import { fmtRp } from '../../src/lib/utils';
 import { usePromptModal } from '../../src/components/PromptModal';
+import { RekeningDropdown } from '../../src/components/RekeningDropdown';
+import { ChannelPicker } from '../../src/components/ChannelPicker';
+import { savePengaturan } from '../../src/lib/safeSave';
 
 export default function TransferScreen() {
+  const { colors, GRADIENT_HEADER } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const { prompt, PromptComponent } = usePromptModal();
   const [rekening, setRekening] = useState<any[]>([]);
   const [fees, setFees] = useState<number[]>([3000, 5000, 10000]);
   const [selectedFee, setSelectedFee] = useState<number | null>(null);
   const [nominal, setNominal] = useState('');
-  const [selectedRek, setSelectedRek] = useState<any>(null);
-  const [selectedCashRek, setSelectedCashRek] = useState<any>(null);
+  const [selectedRek, setSelectedRek] = useState<any>(null); // rekening sumber modal, berkurang
+  const [selectedCashRek, setSelectedCashRek] = useState<any>(null); // penerima cash dari customer, bertambah
+  const [channelCustomer, setChannelCustomer] = useState(''); // hanya catatan: customer mau transfer ke mana
   const [catatan, setCatatan] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showForm, setShowForm] = useState(false);
 
   useFocusEffect(useCallback(() => {
     loadData();
-    return () => { setShowForm(false); setSelectedFee(null); };
   }, []));
 
   const loadData = async () => {
@@ -33,75 +39,133 @@ export default function TransferScreen() {
       supabase.from('rekening').select('*').eq('user_id', user.id).order('urutan'),
       supabase.from('pengaturan').select('fees_tf').eq('user_id', user.id).single(),
     ]);
-    setRekening(rek || []);
+    const list = rek || [];
+    setRekening(list);
     if (peng?.fees_tf) setFees(peng.fees_tf);
-  };
 
-  const selectFee = (fee: number) => {
-    setSelectedFee(fee);
-    setShowForm(true);
+    setSelectedRek((cur: any) => {
+      if (!cur) return cur;
+      const fresh = list.find(r => r.id === cur.id);
+      return fresh || null;
+    });
+    setSelectedCashRek((cur: any) => {
+      if (!cur) return cur;
+      const fresh = list.find(r => r.id === cur.id);
+      return fresh || null;
+    });
   };
 
   const addCustomFee = () => {
     prompt('Biaya Admin Custom (Rp)', (val) => {
-      if (val && !isNaN(Number(val)) && Number(val) > 0) selectFee(Number(val));
+      if (val && !isNaN(Number(val)) && Number(val) > 0) setSelectedFee(Number(val));
     });
   };
 
+  const resetForm = () => {
+    setNominal(''); setCatatan(''); setChannelCustomer('');
+    setSelectedRek(null); setSelectedCashRek(null); setSelectedFee(null);
+  };
+
+  const saldoKurang = !!(selectedRek && nominal && Number(nominal) > 0 && selectedRek.saldo < Number(nominal));
+  const isValid = !!(nominal && Number(nominal) > 0 && selectedRek && selectedCashRek && selectedFee && selectedRek.id !== selectedCashRek.id);
+
   const simpan = async () => {
     if (!nominal || Number(nominal) <= 0) return Alert.alert('Error', 'Masukkan nominal yang valid');
-    if (!selectedRek) return Alert.alert('Error', 'Pilih rekening pengirim');
-    if (!selectedCashRek) return Alert.alert('Error', 'Pilih rekening penerima cash');
+    if (!selectedCashRek) return Alert.alert('Error', 'Pilih rekening penerima cash dari customer');
+    if (!selectedRek) return Alert.alert('Error', 'Pilih rekening modal yang dipakai untuk kirim');
     if (selectedRek.id === selectedCashRek.id) return Alert.alert('Error', 'Rekening tidak boleh sama');
     if (!selectedFee) return Alert.alert('Error', 'Pilih biaya admin');
-    if (selectedRek.saldo < Number(nominal)) return Alert.alert('Saldo Tidak Cukup', `Saldo ${selectedRek.nama} hanya ${fmtRp(selectedRek.saldo)}`);
+    if (selectedRek.saldo < Number(nominal)) {
+      return Alert.alert(
+        '⚠️ Modal Tidak Cukup',
+        `Modal di rekening "${selectedRek.nama}" tidak cukup untuk transaksi ini.\n\nSaldo tersedia: ${fmtRp(selectedRek.saldo)}\nDibutuhkan: ${fmtRp(Number(nominal))}\nKurang: ${fmtRp(Number(nominal) - selectedRek.saldo)}`
+      );
+    }
 
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setLoading(false); return Alert.alert('Error', 'Sesi tidak ditemukan, silakan login ulang.'); }
     try {
-      const newSaldo = selectedRek.saldo - Number(nominal);
-      const newCashSaldo = selectedCashRek.saldo + Number(nominal);
+      const nominalNum = Number(nominal);
 
-      await supabase.from('rekening').update({ saldo: newSaldo, updated_at: new Date().toISOString() }).eq('id', selectedRek.id);
-      await supabase.from('rekening').update({ saldo: newCashSaldo, updated_at: new Date().toISOString() }).eq('id', selectedCashRek.id);
+      const { data: freshRek, error: errFresh } = await supabase
+        .from('rekening').select('saldo, nama').eq('id', selectedRek.id).single();
+      if (errFresh || !freshRek) throw new Error('Gagal memverifikasi saldo terbaru, coba lagi.');
+      if (freshRek.saldo < nominalNum) {
+        setLoading(false);
+        return Alert.alert(
+          '⚠️ Modal Tidak Cukup',
+          `Modal di rekening "${freshRek.nama}" tidak cukup untuk transaksi ini.\n\nSaldo tersedia: ${fmtRp(freshRek.saldo)}\nDibutuhkan: ${fmtRp(nominalNum)}\nKurang: ${fmtRp(nominalNum - freshRek.saldo)}`
+        );
+      }
 
-      const { data: peng } = await supabase.from('pengaturan').select('total_keuntungan').eq('user_id', user!.id).single();
-      const newKtg = (peng?.total_keuntungan || 0) + selectedFee;
-      await supabase.from('pengaturan').update({ total_keuntungan: newKtg }).eq('user_id', user!.id);
+      const newSaldo = freshRek.saldo - nominalNum;
+      const newCashSaldo = selectedCashRek.saldo + nominalNum;
 
-      await supabase.from('transaksi').insert({
-        user_id: user!.id, jenis: 'TF', nominal: Number(nominal),
+      const { error: errRek } = await supabase.from('rekening')
+        .update({ saldo: newSaldo, updated_at: new Date().toISOString() })
+        .eq('id', selectedRek.id);
+      if (errRek) throw new Error(`Gagal update saldo ${selectedRek.nama}: ${errRek.message}`);
+
+      const { error: errCash } = await supabase.from('rekening')
+        .update({ saldo: newCashSaldo, updated_at: new Date().toISOString() })
+        .eq('id', selectedCashRek.id);
+      if (errCash) {
+        await supabase.from('rekening').update({ saldo: selectedRek.saldo }).eq('id', selectedRek.id);
+        throw new Error(`Gagal update saldo ${selectedCashRek.nama}: ${errCash.message}`);
+      }
+
+      const { data: peng } = await supabase.from('pengaturan').select('total_keuntungan').eq('user_id', user.id).single();
+      await savePengaturan(user.id, { total_keuntungan: (peng?.total_keuntungan || 0) + selectedFee });
+
+      const { error: errTx } = await supabase.from('transaksi').insert({
+        user_id: user.id, jenis: 'TF', nominal: nominalNum,
         admin: selectedFee, rekening_id: selectedRek.id,
         rekening_nama: selectedRek.nama,
         cash_rekening_id: selectedCashRek.id, cash_rekening_nama: selectedCashRek.nama,
+        channel_customer: channelCustomer || null,
         catatan, tanggal: new Date().toISOString(),
       });
+      if (errTx) throw new Error(`Saldo sudah diupdate tapi riwayat gagal disimpan: ${errTx.message}`);
 
-      Alert.alert('✅ Berhasil', `Transfer ${fmtRp(Number(nominal))} berhasil disimpan!`);
-      setNominal(''); setCatatan(''); setSelectedRek(null); setSelectedCashRek(null); setSelectedFee(null); setShowForm(false);
+      Alert.alert('✅ Berhasil', `Transfer ${fmtRp(nominalNum)} berhasil disimpan!`);
+      resetForm();
       loadData();
     } catch (e: any) {
-      Alert.alert('Gagal', e.message);
+      Alert.alert('Gagal', e.message || 'Terjadi kesalahan, coba lagi.');
     }
     setLoading(false);
   };
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>🔄 Transfer</Text>
-        <Text style={styles.headerSub}>Pilih biaya admin untuk mulai</Text>
-      </View>
+      <LinearGradient colors={GRADIENT_HEADER} style={styles.header}>
+        <Text style={styles.headerTitle}>🔄 Transfer (TF)</Text>
+        <Text style={styles.headerSub}>Kamu terima cash dari customer → kamu kirimkan lewat rekening kamu</Text>
+      </LinearGradient>
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>PILIH BIAYA ADMIN</Text>
+          <Text style={styles.cardTitle}>NOMINAL TRANSFER</Text>
+          <View style={styles.nominalRow}>
+            <Text style={styles.nominalPrefix}>Rp</Text>
+            <TextInput
+              style={styles.nominalInput} placeholder="0"
+              placeholderTextColor={colors.gray400}
+              value={nominal} onChangeText={setNominal} keyboardType="numeric"
+            />
+          </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>BIAYA ADMIN (diambil dari customer)</Text>
           <View style={styles.feesWrap}>
             {fees.map(f => (
               <TouchableOpacity
                 key={f}
                 style={[styles.feeBtn, selectedFee === f && styles.feeBtnActive]}
-                onPress={() => selectFee(f)}
+                onPress={() => setSelectedFee(f)}
               >
                 <Text style={[styles.feeBtnText, selectedFee === f && styles.feeBtnTextActive]}>{fmtRp(f)}</Text>
               </TouchableOpacity>
@@ -112,132 +176,143 @@ export default function TransferScreen() {
           </View>
         </View>
 
-        {showForm && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>🔄 FORM TRANSFER</Text>
-
-            <Text style={styles.label}>Nominal Transfer</Text>
-            <TextInput
-              style={styles.input} placeholder="Contoh: 200000"
-              placeholderTextColor={colors.gray400}
-              value={nominal} onChangeText={setNominal} keyboardType="numeric"
-            />
-
-            <Text style={styles.label}>Transfer dari Rekening</Text>
-            <View style={styles.rekeningList}>
-              {rekening.map(r => (
-                <TouchableOpacity
-                  key={r.id}
-                  style={[styles.rekeningOpt, selectedRek?.id === r.id && styles.rekeningOptActive]}
-                  onPress={() => setSelectedRek(r)}
-                >
-                  <View style={[styles.rekeningIcon, { backgroundColor: REKENING_COLORS[r.warna] || '#dbeafe' }]}>
-                    <Text>{r.emoji || '💳'}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rekeningName}>{r.nama}</Text>
-                    <Text style={styles.rekeningBalance}>{fmtRp(r.saldo)}</Text>
-                  </View>
-                  {selectedRek?.id === r.id && <Text style={{ color: colors.blue }}>✓</Text>}
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.label}>Rekening Penerima Cash</Text>
-            <View style={styles.rekeningList}>
-              {rekening.filter(r => r.id !== selectedRek?.id).map(r => (
-                <TouchableOpacity
-                  key={r.id}
-                  style={[styles.rekeningOpt, selectedCashRek?.id === r.id && styles.rekeningOptActive]}
-                  onPress={() => setSelectedCashRek(r)}
-                >
-                  <View style={[styles.rekeningIcon, { backgroundColor: REKENING_COLORS[r.warna] || '#dbeafe' }]}>
-                    <Text>{r.emoji || '💳'}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rekeningName}>{r.nama}</Text>
-                    <Text style={styles.rekeningBalance}>{fmtRp(r.saldo)}</Text>
-                  </View>
-                  {selectedCashRek?.id === r.id && <Text style={{ color: colors.blue }}>✓</Text>}
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.label}>Biaya Admin</Text>
-            <View style={[styles.input, { justifyContent: 'center' }]}>
-              <Text style={{ color: colors.gray800, fontSize: 15 }}>{fmtRp(selectedFee || 0)}</Text>
-            </View>
-
-            <Text style={styles.label}>Nama Pengirim / Catatan</Text>
-            <TextInput
-              style={styles.input} placeholder="Contoh: Bu Sari transfer DANA"
-              placeholderTextColor={colors.gray400}
-              value={catatan} onChangeText={setCatatan}
-            />
-
-            {nominal ? (
-              <View style={styles.preview}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={styles.previewLabel}>Rekening berkurang</Text>
-                  <Text style={[styles.previewValue, { color: colors.red, fontSize: 14 }]}>{fmtRp(Number(nominal))}</Text>
-                </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={styles.previewLabel}>Cash bertambah</Text>
-                  <Text style={[styles.previewValue, { color: colors.green, fontSize: 14 }]}>{fmtRp(Number(nominal))}</Text>
-                </View>
-                <View style={styles.divider} />
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={styles.previewLabel}>Keuntungan Admin</Text>
-                  <Text style={[styles.previewValue, { color: colors.green, fontSize: 14 }]}>{fmtRp(selectedFee || 0)}</Text>
-                </View>
-              </View>
-            ) : null}
-
-            <View style={styles.btnRow}>
-              <TouchableOpacity style={[styles.btn, styles.btnOutline]} onPress={() => { setShowForm(false); setSelectedFee(null); }}>
-                <Text style={styles.btnOutlineText}>Batal</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.btn, styles.btnPrimary, loading && { opacity: 0.7 }]} onPress={simpan} disabled={loading}>
-                {loading ? <ActivityIndicator color={colors.white} /> : <Text style={styles.btnText}>🔄 Simpan TF</Text>}
-              </TouchableOpacity>
+        <View style={styles.card}>
+          <View style={styles.stepRow}>
+            <View style={[styles.stepBadge, { backgroundColor: colors.green }]}><Text style={styles.stepBadgeText}>1</Text></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.stepTitle}>Rekening kamu yang <Text style={{ color: colors.green }}>bertambah</Text></Text>
+              <Text style={styles.stepHelper}>Tempat cash fisik dari customer kamu simpan/setorkan.</Text>
             </View>
           </View>
-        )}
+          <RekeningDropdown
+            label=""
+            placeholder="Pilih rekening/kas penerima cash"
+            value={selectedCashRek}
+            options={rekening}
+            onSelect={setSelectedCashRek}
+            accent={colors.green}
+          />
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.stepRow}>
+            <View style={[styles.stepBadge, { backgroundColor: colors.red }]}><Text style={styles.stepBadgeText}>2</Text></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.stepTitle}>Rekening kamu yang <Text style={{ color: colors.red }}>berkurang</Text></Text>
+              <Text style={styles.stepHelper}>Pilih rekening modal usaha yang benar-benar kamu pakai untuk kirim (mis. SeaBank).</Text>
+            </View>
+          </View>
+          <RekeningDropdown
+            label=""
+            placeholder="Pilih rekening modal pengirim"
+            value={selectedRek}
+            options={rekening.filter(r => r.id !== selectedCashRek?.id)}
+            onSelect={setSelectedRek}
+            accent={colors.red}
+          />
+          {selectedRek && nominal && Number(nominal) > 0 && selectedRek.saldo < Number(nominal) ? (
+            <View style={styles.warnBox}>
+              <Text style={styles.warnTitle}>⚠️ Modal tidak cukup</Text>
+              <Text style={styles.warnText}>
+                Saldo "{selectedRek.nama}" hanya {fmtRp(selectedRek.saldo)}, dibutuhkan {fmtRp(Number(nominal))}.
+              </Text>
+            </View>
+          ) : null}
+
+          <ChannelPicker
+            label={selectedRek ? `${selectedRek.nama} ini kamu TF ke tujuan customer apa?` : 'Rekening di atas kamu TF ke tujuan customer apa?'}
+            helper='Cuma catatan, TIDAK ngaruh ke saldo — saldo yang kepotong tetap rekening yang kamu pilih di atas. Contoh: customer minta kirim ke GOPAY, kamu pilih SeaBank di atas → berarti SeaBank yang TF ke GOPAY.'
+            value={channelCustomer}
+            onChange={setChannelCustomer}
+          />
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>CATATAN (OPSIONAL)</Text>
+          <TextInput
+            style={styles.input} placeholder="Contoh: Bu Sari transfer ke GOPAY anaknya"
+            placeholderTextColor={colors.gray400}
+            value={catatan} onChangeText={setCatatan}
+          />
+        </View>
+
+        {nominal ? (
+          <View style={styles.preview}>
+            <Text style={styles.previewTitle}>RINGKASAN</Text>
+            <View style={styles.previewLine}>
+              <Text style={styles.previewLabel}>⬆️ {selectedCashRek?.nama || 'Rekening penerima cash'} bertambah</Text>
+              <Text style={[styles.previewValue, { color: colors.green }]}>{fmtRp(Number(nominal))}</Text>
+            </View>
+            <View style={styles.previewLine}>
+              <Text style={styles.previewLabel}>⬇️ {selectedRek?.nama || 'Rekening modal pengirim'} berkurang</Text>
+              <Text style={[styles.previewValue, { color: colors.red }]}>{fmtRp(Number(nominal))}</Text>
+            </View>
+            {channelCustomer ? (
+              <View style={styles.previewLine}>
+                <Text style={styles.previewLabel}>ℹ️ {selectedRek?.nama || 'Rekening berkurang'} → TF ke</Text>
+                <Text style={[styles.previewValue, { color: colors.gray500, fontSize: 13 }]}>{channelCustomer}</Text>
+              </View>
+            ) : null}
+            <View style={styles.divider} />
+            <View style={styles.previewLine}>
+              <Text style={styles.previewLabel}>💰 Keuntungan Admin</Text>
+              <Text style={[styles.previewValue, { color: colors.green }]}>{fmtRp(selectedFee || 0)}</Text>
+            </View>
+          </View>
+        ) : null}
+
+        <TouchableOpacity
+          style={[styles.submitBtn, (loading || saldoKurang || !isValid) && { opacity: 0.5 }]}
+          onPress={simpan}
+          disabled={loading || saldoKurang || !isValid}
+        >
+          {loading ? <ActivityIndicator color={colors.white} /> : (
+            <>
+              <Ionicons name="checkmark-circle" size={18} color={colors.white} />
+              <Text style={styles.submitBtnText}>Simpan Transfer</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </ScrollView>
       <PromptComponent />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.gray100 },
-  header: { backgroundColor: colors.blueDark, paddingTop: 56, paddingBottom: 20, paddingHorizontal: 20 },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: colors.white },
-  headerSub: { fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 2 },
-  card: { backgroundColor: colors.white, borderRadius: 12, padding: 16, marginBottom: 12, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3 },
+  header: { paddingTop: 56, paddingBottom: 20, paddingHorizontal: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: colors.white },
+  headerSub: { fontSize: 13, color: 'rgba(255,255,255,0.78)', marginTop: 2 },
+  card: { backgroundColor: colors.surface1, borderWidth: 0.5, borderColor: colors.gray200, borderRadius: 16, padding: 16, marginBottom: 12, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3 },
   cardTitle: { fontSize: 12, fontWeight: '700', color: colors.gray500, letterSpacing: 0.5, marginBottom: 12 },
+  nominalRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: colors.gray200, borderRadius: 12, paddingHorizontal: 14 },
+  nominalPrefix: { fontSize: 20, fontWeight: '700', color: colors.gray500, marginRight: 6 },
+  nominalInput: { flex: 1, fontSize: 24, fontWeight: '800', color: colors.gray800, paddingVertical: 12 },
   feesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  feeBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: colors.gray200, backgroundColor: colors.white },
+  feeBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: colors.gray200, backgroundColor: colors.surface1 },
   feeBtnActive: { backgroundColor: colors.blue, borderColor: colors.blue },
   feeBtnCustom: { borderStyle: 'dashed' },
   feeBtnText: { fontSize: 14, fontWeight: '600', color: colors.gray700 },
   feeBtnTextActive: { color: colors.white },
+  stepRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  stepBadge: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  stepBadgeText: { color: colors.white, fontSize: 12, fontWeight: '800' },
+  stepTitle: { fontSize: 14, fontWeight: '700', color: colors.gray800, marginBottom: 2 },
+  stepHelper: { fontSize: 12, color: colors.gray500, lineHeight: 16 },
   label: { fontSize: 13, fontWeight: '600', color: colors.gray700, marginBottom: 6, marginTop: 4 },
-  input: { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: 8, padding: 12, fontSize: 15, color: colors.gray800, marginBottom: 12 },
-  rekeningList: { marginBottom: 12, gap: 8 },
-  rekeningOpt: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 8, borderWidth: 1.5, borderColor: colors.gray200, gap: 10 },
-  rekeningOptActive: { borderColor: colors.blue, backgroundColor: '#eff6ff' },
-  rekeningIcon: { width: 36, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  rekeningName: { fontSize: 14, fontWeight: '600', color: colors.gray800 },
-  rekeningBalance: { fontSize: 12, color: colors.gray500 },
-  preview: { backgroundColor: colors.gray50, borderRadius: 8, padding: 14, marginBottom: 16, borderWidth: 1.5, borderColor: colors.gray200 },
-  previewLabel: { fontSize: 12, color: colors.gray500 },
-  previewValue: { fontSize: 18, fontWeight: '700' },
-  divider: { height: 1, backgroundColor: colors.gray200, marginVertical: 8 },
-  btnRow: { flexDirection: 'row', gap: 8 },
-  btn: { flex: 1, padding: 14, borderRadius: 8, alignItems: 'center' },
-  btnOutline: { backgroundColor: colors.white, borderWidth: 1.5, borderColor: colors.gray200 },
-  btnPrimary: { backgroundColor: colors.blue },
-  btnOutlineText: { fontSize: 15, fontWeight: '600', color: colors.gray700 },
-  btnText: { fontSize: 15, fontWeight: '600', color: colors.white },
+  input: { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: 12, padding: 12, fontSize: 15, color: colors.gray800 },
+  preview: { backgroundColor: colors.surface1, borderRadius: 16, padding: 16, marginBottom: 14, borderWidth: 1.5, borderColor: colors.gray200 },
+  previewTitle: { fontSize: 11, fontWeight: '700', color: colors.gray500, letterSpacing: 0.5, marginBottom: 10 },
+  previewLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  warnBox: { backgroundColor: colors.redLight, borderRadius: 12, padding: 12, marginTop: 12, borderWidth: 1, borderColor: colors.red },
+  warnTitle: { fontSize: 13, fontWeight: '700', color: colors.red, marginBottom: 3 },
+  warnText: { fontSize: 12, color: colors.gray700, lineHeight: 17 },
+  previewLabel: { fontSize: 12.5, color: colors.gray500, flexShrink: 1, marginRight: 8 },
+  previewValue: { fontSize: 15, fontWeight: '700' },
+  divider: { height: 1, backgroundColor: colors.gray200, marginVertical: 4, marginBottom: 10 },
+  submitBtn: { flexDirection: 'row', gap: 8, backgroundColor: colors.blue, padding: 16, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  submitBtnText: { fontSize: 15, fontWeight: '700', color: colors.white },
 });
+}
