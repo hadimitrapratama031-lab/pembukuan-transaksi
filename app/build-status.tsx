@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking, ActivityIndicator, RefreshControl, ScrollView } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../src/lib/supabase';
 import { useTheme } from '../src/lib/ThemeContext';
@@ -18,6 +19,8 @@ type BuildRequest = {
 
 export default function BuildStatusScreen() {
   const { colors, GRADIENT_HEADER } = useTheme();
+  const params = useLocalSearchParams<{ target?: string }>();
+  const target = params.target || '/(tabs)/dashboard';
   const [row, setRow] = useState<BuildRequest | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -90,6 +93,18 @@ export default function BuildStatusScreen() {
           Setelah APK terdownload, install manual di HP (aktifkan "izinkan sumber tidak dikenal" kalau diminta).
           Nama & ikon di homescreen akan berubah sesuai APK baru ini.
         </Text>
+
+        {(row?.status === 'pending' || row?.status === 'building') && (
+          <TouchableOpacity style={styles.linkBtn} onPress={() => router.replace(target as any)}>
+            <Text style={styles.linkBtnText}>Lanjutkan Pakai Aplikasi →</Text>
+          </TouchableOpacity>
+        )}
+        {(row?.status === 'pending' || row?.status === 'building') && (
+          <Text style={styles.note}>
+            Build tetap jalan di background walau kamu tinggal. Balik lagi ke layar ini kapan saja
+            lewat menu Pengaturan untuk cek status atau download APK-nya.
+          </Text>
+        )}
       </ScrollView>
     </LinearGradient>
   );
@@ -106,4 +121,6 @@ const styles = StyleSheet.create({
   btnText: { color: '#fff', fontWeight: '700' },
   error: { color: '#f87171', marginTop: 8, textAlign: 'center' },
   note: { color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 20, textAlign: 'center', lineHeight: 18 },
+  linkBtn: { marginTop: 20, alignItems: 'center' },
+  linkBtnText: { color: '#93c5fd', fontSize: 14, fontWeight: '700' },
 });

@@ -21,9 +21,15 @@ import { savePengaturan } from '../src/lib/safeSave';
  * (ready / building / failed) di layar Pengaturan, lalu di-download
  * & install manual saat sudah "ready".
  */
-async function triggerCustomBuild(appName: string, logoBase64: string) {
+async function triggerCustomBuild(
+  appName: string,
+  logoBase64: string,
+  onProgress?: (text: string) => void
+) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sesi tidak ditemukan');
+
+  onProgress?.('Mengunggah logo ke server...');
 
   // logoBase64 formatnya "data:image/jpeg;base64,xxxx"
   const [meta, base64Data] = logoBase64.split(',');
@@ -37,6 +43,8 @@ async function triggerCustomBuild(appName: string, logoBase64: string) {
   if (uploadErr) throw new Error(uploadErr.message);
 
   const { data: publicUrlData } = supabase.storage.from('app-logos').getPublicUrl(path);
+
+  onProgress?.('Memicu build APK baru...');
 
   const { data: sessionData } = await supabase.auth.getSession();
   const res = await fetch(`${(supabase as any).supabaseUrl}/functions/v1/request-build`, {
@@ -62,6 +70,9 @@ export default function BrandSetupScreen() {
   const [nama, setNama] = useState('Kasir ATM');
   const [logo, setLogo] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Teks status yang berubah-ubah selama proses, biar user tahu lagi ngapain
+  // (bukan cuma spinner diam yang bikin kelihatan macet)
+  const [statusText, setStatusText] = useState('');
 
   const pilihLogo = async () => {
     pauseRelock();
@@ -92,6 +103,7 @@ export default function BrandSetupScreen() {
       return Alert.alert('Error', 'Nama warung tidak boleh kosong.');
     }
     setSaving(true);
+    setStatusText('Menyimpan identitas aplikasi...');
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Sesi tidak ditemukan, silakan login ulang.');
@@ -108,13 +120,30 @@ export default function BrandSetupScreen() {
       }
 
       // Trigger pipeline build APK custom (nama & ikon homescreen).
-      // Sengaja tidak "await" & tidak melempar error kalau gagal —
-      // ini proses latar belakang, tidak boleh menghalangi user lanjut
-      // pakai aplikasi. Status build bisa dicek nanti di menu Pengaturan.
+      // Sengaja DI-AWAIT (bukan fire-and-forget) supaya user lihat progress
+      // yang jelas ("mengunggah logo...", "memicu build...") alih-alih
+      // layar diam yang bikin kelihatan macet. Kalau gagal, tetap tampilkan
+      // pesan error yang jelas — jangan didiamkan.
       if (!skip && finalLogo) {
-        triggerCustomBuild(finalName, finalLogo).catch((e) =>
-          console.warn('Gagal trigger build custom:', e.message)
-        );
+        setStatusText('Mengunggah logo...');
+        try {
+          await triggerCustomBuild(finalName, finalLogo, setStatusText);
+        } catch (e: any) {
+          setSaving(false);
+          Alert.alert(
+            'Build APK Gagal Dimulai',
+            `Identitas aplikasi tersimpan, tapi build APK custom gagal dipicu: ${e.message}\n\nKamu tetap bisa lanjut pakai aplikasi, dan coba ganti identitas lagi nanti dari Pengaturan.`,
+            [{ text: 'Lanjut ke Aplikasi', onPress: () => router.replace(target as any) }]
+          );
+          return;
+        }
+        setStatusText('Build APK dimulai!');
+        // Arahkan ke layar Status Build (bukan langsung ke target) supaya
+        // user lihat progress build-nya, dengan tombol buat lanjut pakai
+        // app kapan saja tanpa harus nunggu build selesai.
+        router.replace({ pathname: '/build-status', params: { target } } as any);
+        setSaving(false);
+        return;
       }
 
       router.replace(target as any);
@@ -160,8 +189,18 @@ export default function BrandSetupScreen() {
               onPress={() => simpan(false)}
               disabled={saving}
             >
-              {saving ? <ActivityIndicator color={colors.white} /> : <Text style={styles.btnText}>Simpan & Lanjutkan</Text>}
+              {saving ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <ActivityIndicator color={colors.white} />
+                  <Text style={styles.btnText}>{statusText || 'Menyimpan...'}</Text>
+                </View>
+              ) : (
+                <Text style={styles.btnText}>Simpan & Lanjutkan</Text>
+              )}
             </TouchableOpacity>
+            {saving && (
+              <Text style={styles.progressNote}>Mohon tunggu, jangan tutup aplikasi...</Text>
+            )}
 
             <TouchableOpacity style={styles.skipBtn} onPress={() => simpan(true)} disabled={saving}>
               <Text style={styles.skipBtnText}>Lewati, pakai default</Text>
@@ -199,6 +238,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   },
   btn: { backgroundColor: colors.blue, borderRadius: 12, padding: 14, alignItems: 'center' },
   btnText: { color: colors.white, fontSize: 15, fontWeight: '600' },
+  progressNote: { color: colors.gray500, fontSize: 12, textAlign: 'center', marginTop: 8 },
   skipBtn: { padding: 12, alignItems: 'center', marginTop: 4 },
   skipBtnText: { color: colors.gray500, fontSize: 13, fontWeight: '600' },
 });
